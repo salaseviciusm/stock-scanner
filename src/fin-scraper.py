@@ -69,10 +69,10 @@ async def pull_data(page, tags=None):
 
     iters = 0
     seen = set()
-
     while True:
         try:
-            while not scrolled_to_end:
+            num_times_at_bottom = 0
+            while num_times_at_bottom < 2:
                 stocks = await page.querySelectorAll('div.item-wrapper')
 
                 for i, stock in enumerate(stocks):
@@ -147,7 +147,7 @@ async def pull_data(page, tags=None):
                 scroll_height = await page.evaluate('(e) => e.scrollHeight', scroll_area)
                 # scroll check at the bottom so that we will run through the last section twice,
                 # making sure we scraped all (incase the scrolled_to_end was hit prematurely)
-                scrolled_to_end = scroll_height == prev_scroll_height
+                num_times_at_bottom += 1 if scroll_height == prev_scroll_height else 0
                 prev_scroll_height = scroll_height
                 await page.evaluate(f'(e) => e.scrollTop = e.offsetHeight * ({iters})', scroll_area)
                 time.sleep(2)
