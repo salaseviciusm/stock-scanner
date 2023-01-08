@@ -53,12 +53,21 @@ async def pull_data(page, tags=None):
         tags = {}
 
     await page.waitFor('div.item-wrapper')
-    time.sleep(5)
+    time.sleep(3)
+
+    async def get_attribute(attribute):
+        attr = await page.xpath(f'//div[contains(text(), "{attribute}") and contains(@class, "label")]')
+        return await page.evaluate("(e) => e.nextSibling.textContent", attr[0])
 
     scroll_area = (await page.querySelectorAll('div.scrollable-area'))[1]
     prev_scroll_height = 0
     scrolled_to_end = False
+
+    iters = 0
+    seen = set()
     while not scrolled_to_end:
+        iters += 1
+
         scroll_height = await page.evaluate('(e) => e.scrollHeight', scroll_area)
         scrolled_to_end = scroll_height == prev_scroll_height
         if scrolled_to_end:
@@ -68,11 +77,14 @@ async def pull_data(page, tags=None):
         stocks = await page.querySelectorAll('div.item-wrapper')
 
         for i, stock in enumerate(stocks):
-            if i >= len(stocks) - 1:
-                break
-
             elem = await stock.querySelector('div.symbol')
             ticker = await page.evaluate('(e) => e.textContent', elem)
+
+            if ticker in seen:
+                continue
+            seen.add(ticker)
+
+            await page.evaluate("(e) => e.scrollIntoViewIfNeeded()", stock)
 
             f_name = ticker.replace('/', '-')
 
@@ -81,15 +93,30 @@ async def pull_data(page, tags=None):
 
             while True:
                 await stock.click()
-                time.sleep(2)
+                time.sleep(1)
                 try:
-                    await page.waitFor('div.description')
-                    break
+                    description = await page.querySelector('div.description')
+                    if description is not None:
+                        break
                 except:
                     pass
 
             elem = await page.querySelector('div.description')
             description = await page.evaluate('(v) => v.textContent', elem)
+
+            metadata = {
+                'name': await get_attribute('Name'),
+                'currency': await get_attribute('Currency'),
+                'employees': await get_attribute('Employees'),
+                'sector': await get_attribute('Sector'),
+                'industry': await get_attribute('Industry'),
+                'market cap': await get_attribute('Market Cap'),
+                'P/E ratio': await get_attribute('P/E Ratio'),
+                'revenue': await get_attribute('Revenue'),
+                'EPS': await get_attribute('EPS'),
+                'dividend yield': await get_attribute('Dividend yield'),
+                'beta': await get_attribute('Beta')
+            }
 
             elem = await page.querySelector('div.close-button-in-header')
             await elem.click()
@@ -101,13 +128,14 @@ async def pull_data(page, tags=None):
             with open(f'../stocks/{f_name}.json', 'w') as f:
                 json.dump({
                     ticker: description,
-                    'tags': tags
+                    'tags': tags,
+                    **metadata
                 }, f)
 
             time.sleep(1.5)
 
-        await page.evaluate(f'(e) => e.scrollTop += e.offsetHeight*3/4', scroll_area)
-        time.sleep(5)
+        await page.evaluate(f'(e) => e.scrollTop = e.offsetHeight * ({iters})', scroll_area)
+        time.sleep(3)
 
 
 async def main():
@@ -155,7 +183,9 @@ async def main():
                 await scrape_folder(f, hierarchy=hierarchy.copy())
 
     elem = await page.xpath('//div[contains(text(), "Browse all") and contains(@class, "label")]')
-    await scrape_folder(elem[0])
+    # await scrape_folder(elem[0])
+
+    await pull_data(page)
 
     time.sleep(50)
 
