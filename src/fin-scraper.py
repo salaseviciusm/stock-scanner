@@ -9,7 +9,6 @@ import time
 import re
 import json
 
-ticker_to_description = dict()
 
 async def login(page):
     await page.goto("https://live.trading212.com/")
@@ -53,89 +52,108 @@ async def pull_data(page, tags=None):
         tags = {}
 
     await page.waitFor('div.item-wrapper')
-    time.sleep(3)
 
     async def get_attribute(attribute):
         attr = await page.xpath(f'//div[contains(text(), "{attribute}") and contains(@class, "label")]')
+        if len(attr) == 0:
+            return None
         return await page.evaluate("(e) => e.nextSibling.textContent", attr[0])
 
     scroll_area = (await page.querySelectorAll('div.scrollable-area'))[1]
     prev_scroll_height = 0
     scrolled_to_end = False
 
+    # make sure we are at the start
+    await page.evaluate(f'(e) => e.scrollTop = 0', scroll_area)
+    time.sleep(2)
+
     iters = 0
     seen = set()
-    while not scrolled_to_end:
-        iters += 1
 
-        scroll_height = await page.evaluate('(e) => e.scrollHeight', scroll_area)
-        scrolled_to_end = scroll_height == prev_scroll_height
-        if scrolled_to_end:
-            break
-        prev_scroll_height = scroll_height
+    while True:
+        try:
+            while not scrolled_to_end:
+                stocks = await page.querySelectorAll('div.item-wrapper')
 
-        stocks = await page.querySelectorAll('div.item-wrapper')
+                for i, stock in enumerate(stocks):
+                    elem = await stock.querySelector('div.symbol')
+                    ticker = await page.evaluate('(e) => e.textContent', elem)
 
-        for i, stock in enumerate(stocks):
-            elem = await stock.querySelector('div.symbol')
-            ticker = await page.evaluate('(e) => e.textContent', elem)
+                    if ticker in seen:
+                        continue
+                    seen.add(ticker)
 
-            if ticker in seen:
-                continue
-            seen.add(ticker)
+                    await page.evaluate("(e) => e.scrollIntoViewIfNeeded()", stock)
 
-            await page.evaluate("(e) => e.scrollIntoViewIfNeeded()", stock)
+                    f_name = ticker.replace('/', '-')
 
-            f_name = ticker.replace('/', '-')
+                    if not REPLACE_DATA and os.path.exists(f"{OUTPUT_DIR}/{f_name}.json"):
+                        continue
 
-            if not REPLACE_DATA and os.path.exists(f"../stocks/{f_name}.json"):
-                continue
+                    retries = 0
+                    while True:
+                        await stock.click()
+                        time.sleep(1)
+                        retries += 1
+                        try:
+                            description = await page.querySelector('div.description')
+                            if description is not None or retries >= 5:
+                                break
+                        except:
+                            print("TRYING AGAIN 2")
+                            pass
 
-            while True:
-                await stock.click()
-                time.sleep(1)
-                try:
-                    description = await page.querySelector('div.description')
-                    if description is not None:
-                        break
-                except:
-                    pass
+                    if retries >= 5:
+                        # No description available
+                        elem = await page.querySelector('div.close-button-in-header')
+                        await elem.click()
+                        time.sleep(1)
+                        continue
 
-            elem = await page.querySelector('div.description')
-            description = await page.evaluate('(v) => v.textContent', elem)
+                    elem = await page.querySelector('div.description')
+                    description = await page.evaluate('(v) => v.textContent', elem)
 
-            metadata = {
-                'name': await get_attribute('Name'),
-                'currency': await get_attribute('Currency'),
-                'employees': await get_attribute('Employees'),
-                'sector': await get_attribute('Sector'),
-                'industry': await get_attribute('Industry'),
-                'market cap': await get_attribute('Market Cap'),
-                'P/E ratio': await get_attribute('P/E Ratio'),
-                'revenue': await get_attribute('Revenue'),
-                'EPS': await get_attribute('EPS'),
-                'dividend yield': await get_attribute('Dividend yield'),
-                'beta': await get_attribute('Beta')
-            }
+                    metadata = {
+                        'name': await get_attribute('Name'),
+                        'currency': await get_attribute('Currency'),
+                        'employees': await get_attribute('Employees'),
+                        'sector': await get_attribute('Sector'),
+                        'industry': await get_attribute('Industry'),
+                        'market cap': await get_attribute('Market Cap'),
+                        'P/E ratio': await get_attribute('P/E Ratio'),
+                        'revenue': await get_attribute('Revenue'),
+                        'EPS': await get_attribute('EPS'),
+                        'dividend yield': await get_attribute('Dividend yield'),
+                        'beta': await get_attribute('Beta')
+                    }
 
-            elem = await page.querySelector('div.close-button-in-header')
-            await elem.click()
+                    elem = await page.querySelector('div.close-button-in-header')
+                    await elem.click()
 
-            print(ticker)
-            print(description)
-            print("-------------------------------")
+                    print(ticker)
+                    print(description)
+                    print("-------------------------------")
 
-            with open(f'../stocks/{f_name}.json', 'w') as f:
-                json.dump({
-                    ticker: description,
-                    'tags': tags,
-                    **metadata
-                }, f)
+                    with open(f'{OUTPUT_DIR}/{f_name}.json', 'w') as f:
+                        json.dump({
+                            ticker: description,
+                            'tags': tags,
+                            **metadata
+                        }, f)
 
-            time.sleep(1.5)
+                    time.sleep(1) # wait for elem to close
 
-        await page.evaluate(f'(e) => e.scrollTop = e.offsetHeight * ({iters})', scroll_area)
-        time.sleep(3)
+                iters += 1
+                scroll_height = await page.evaluate('(e) => e.scrollHeight', scroll_area)
+                # scroll check at the bottom so that we will run through the last section twice,
+                # making sure we scraped all (incase the scrolled_to_end was hit prematurely)
+                scrolled_to_end = scroll_height == prev_scroll_height
+                prev_scroll_height = scroll_height
+                await page.evaluate(f'(e) => e.scrollTop = e.offsetHeight * ({iters})', scroll_area)
+                time.sleep(2)
+        except:
+            print("TRYING AGAIN 1")
+            pass
 
 
 async def main():
@@ -169,6 +187,7 @@ async def main():
         print(folder_name)
         hierarchy.append(folder_name)
 
+        await page.evaluate("(e) => e.scrollIntoView()", folder)
         await folder.click()
         time.sleep(3)
 
@@ -183,11 +202,12 @@ async def main():
                 await scrape_folder(f, hierarchy=hierarchy.copy())
 
     elem = await page.xpath('//div[contains(text(), "Browse all") and contains(@class, "label")]')
-    # await scrape_folder(elem[0])
+    await scrape_folder(elem[0])
 
-    await pull_data(page)
+    # await pull_data(page)
 
     time.sleep(50)
 
-REPLACE_DATA = True
+REPLACE_DATA = False
+OUTPUT_DIR = '../stocks'
 asyncio.get_event_loop().run_until_complete(main())
