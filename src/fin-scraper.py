@@ -48,39 +48,27 @@ async def login(page):
     return True
 
 
-async def main():
-    browser = await launch(headless=False)
-    page = await browser.newPage()
-    await page.setViewport({'width': 1400, 'height': 1080})
+async def pull_data(page, tags=None):
+    if tags is None:
+        tags = {}
 
-    if not await login(page):
-        print("Could not log in")
-        sys.exit(1)
-
-    while True:
-        try:
-            search = await page.querySelector("div.search-tab")
-            await search.click()
-            break
-        except:
-            pass
-
-    await page.waitForXPath('//div[contains(text(), "Stocks")]')
-    elem = await page.xpath('//div[contains(text(), "Stocks")]')
-    await elem[0].click()
-
-    await page.waitForXPath('//span[contains(text(), "Apple")]')
+    await page.waitFor('div.item-wrapper')
     time.sleep(5)
 
     scroll_area = (await page.querySelectorAll('div.scrollable-area'))[1]
     prev_scroll_height = 0
     scrolled_to_end = False
     while not scrolled_to_end:
+        scroll_height = await page.evaluate('(e) => e.scrollHeight', scroll_area)
+        scrolled_to_end = scroll_height == prev_scroll_height
+        if scrolled_to_end:
+            break
+        prev_scroll_height = scroll_height
+
         stocks = await page.querySelectorAll('div.item-wrapper')
 
-        scroll = 0
         for i, stock in enumerate(stocks):
-            if i >= len(stocks) - 3:
+            if i >= len(stocks) - 1:
                 break
 
             elem = await stock.querySelector('div.symbol')
@@ -88,7 +76,7 @@ async def main():
 
             f_name = ticker.replace('/', '-')
 
-            if os.path.exists(f"../stocks/{f_name}.json"):
+            if not REPLACE_DATA and os.path.exists(f"../stocks/{f_name}.json"):
                 continue
 
             while True:
@@ -106,32 +94,70 @@ async def main():
             elem = await page.querySelector('div.close-button-in-header')
             await elem.click()
 
-            # if i == len(stocks) - 1:
-            #     style = await page.evaluate('(e) => e.getAttribute("style")', stock)
-            #     scroll = int(re.search(r'(?<=top: )\d+', string=style).group()) + int(re.search(r'(?<=height: )\d+', string=style).group())
-
-            ticker_to_description[ticker] = description
             print(ticker)
             print(description)
             print("-------------------------------")
 
             with open(f'../stocks/{f_name}.json', 'w') as f:
-                json.dump({ticker: description}, f)
+                json.dump({
+                    ticker: description,
+                    'tags': tags
+                }, f)
 
             time.sleep(1.5)
-
-        scroll_height = await page.evaluate('(e) => e.scrollHeight', scroll_area)
-        scrolled_to_end = scroll_height == prev_scroll_height
-        prev_scroll_height = scroll_height
 
         await page.evaluate(f'(e) => e.scrollTop += e.offsetHeight*3/4', scroll_area)
         time.sleep(5)
 
-    with open('../stock-descriptions.json', 'w') as f:
-        json.dump(ticker_to_description, f)
 
+async def main():
+    browser = await launch(headless=False)
+    page = await browser.newPage()
+    await page.setViewport({'width': 1400, 'height': 1080})
+
+    if not await login(page):
+        print("Could not log in")
+        sys.exit(1)
+
+    while True:
+        try:
+            search = await page.querySelector("div.search-tab")
+            await search.click()
+            break
+        except:
+            pass
+
+    await page.waitForXPath('//div[contains(text(), "Stocks") and contains(@class, "label")]')
+    elem = await page.xpath('//div[contains(text(), "Stocks") and contains(@class, "label")]')
+    time.sleep(3)
+    await elem[0].click()
+    time.sleep(1)
+
+    async def scrape_folder(folder, hierarchy=None):
+        if hierarchy is None:
+            hierarchy = []
+
+        folder_name = await page.evaluate("(e) => e.textContent", folder)
+        print(folder_name)
+        hierarchy.append(folder_name)
+
+        await folder.click()
+        time.sleep(3)
+
+        folder = await page.evaluateHandle("(e) => e.closest('div.search-folder')", folder)
+        folders = await folder.asElement().querySelectorAll('div.label')
+        print(len(folders[1:]))
+        # First folder is the current one we are in
+        if len(folders[1:]) == 0:
+            await pull_data(page, tags={'hierarchy': hierarchy})
+        else:
+            for f in folders[1:]:
+                await scrape_folder(f, hierarchy=hierarchy.copy())
+
+    elem = await page.xpath('//div[contains(text(), "Browse all") and contains(@class, "label")]')
+    await scrape_folder(elem[0])
 
     time.sleep(50)
 
-
+REPLACE_DATA = True
 asyncio.get_event_loop().run_until_complete(main())
