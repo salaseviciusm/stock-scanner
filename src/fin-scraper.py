@@ -151,6 +151,7 @@ async def pull_data(page, tags=None):
                 prev_scroll_height = scroll_height
                 await page.evaluate(f'(e) => e.scrollTop = e.offsetHeight * ({iters})', scroll_area)
                 time.sleep(2)
+            return
         except:
             print("TRYING AGAIN 1")
             pass
