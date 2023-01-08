@@ -7,17 +7,16 @@ import pandas as pd
 
 
 def refresh_descriptions():
-    stocks = os.listdir("../stocks/")
+    stocks = os.listdir("../stocks-backup/")
     print(len(stocks))
 
     ticker_to_description = {}
     for stock in stocks:
-        with open(f"../stocks/{stock}", 'r') as f:
-            ticker_to_description = dict(ticker_to_description, **json.load(f))
+        with open(f"../stocks-backup/{stock}", 'r') as f:
+            ticker_to_description[stock[:-5]] = json.load(f)[stock[:-5].replace('-', '/')]
 
     with open('../stock-descriptions.json', 'w') as f:
         json.dump(ticker_to_description, f)
-
 
 stopwords = nltk.corpus.stopwords.words('english')
 from nltk.stem.snowball import SnowballStemmer
